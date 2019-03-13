@@ -1,6 +1,6 @@
 # Description
 # ===========
-# OpenShift sample for Azure
+# OpenShift Deployment for Azure
 
 ---
 - hosts: localhost
@@ -57,14 +57,14 @@
         name: mastersubnet
         address_prefix: "{{ master_subnet_cidr }}"
         virtual_network: "{{ virtual_network_name }}"
-  
+
     - name: Add node subnet
       azure_rm_subnet:
         resource_group: "{{ resource_group }}"
         name: nodesubnet
         address_prefix: "{{ node_subnet_cidr }}"
         virtual_network: "{{ virtual_network_name }}"
-  
+
     - name: Add infra subnet
       azure_rm_subnet:
         resource_group: "{{ resource_group }}"
@@ -150,6 +150,8 @@
         location: "{{ location }}"
         resource_group: "{{ resource_group }}"
         sku: Aligned
+        platform_fault_domain_count: 2
+        platform_update_domain_count: 5
       async: 150
       poll: 0
       register: master_as_output
@@ -160,6 +162,8 @@
         location: "{{ location }}"
         resource_group: "{{ resource_group }}"
         sku: Aligned
+        platform_fault_domain_count: 2
+        platform_update_domain_count: 5
       async: 150
       poll: 0
       register: node_as_output
@@ -170,6 +174,8 @@
         location: "{{ location }}"
         resource_group: "{{ resource_group }}"
         sku: Aligned
+        platform_fault_domain_count: 2
+        platform_update_domain_count: 5
       async: 150
       poll: 0
       register: infra_as_output
@@ -519,7 +525,7 @@
       when: runvmext == "true"
       async: 150
       poll: 0
-    
+
 
     - name: Create infra VM extension
       azure_rm_virtualmachine_extension:
@@ -559,24 +565,26 @@
 - hosts: bastion_vm
   user: "{{ admin_username }}"
   become: yes
+#  ansible_ssh_key: "/Users/"
   vars:
       dest_key: "/home/{{ admin_username }}/.ssh/id_rsa"
       empty_var: ""
   tasks:
     - name: Ensure .ssh directory exists in root home folder.
-      file: 
+      file:
         dest: "{{ dest_key | dirname }}"
-        mode: 0700 
-        owner: "{{ admin_username }}" 
+        mode: 0700
+        owner: "{{ admin_username }}"
         state: directory
 
     - name: Install SSH private key on Bastion
-      copy: 
-        src: "{{ admin_privkey }}" 
+      copy:
+        src: "{{ admin_privkey }}"
         dest: "{{ dest_key }}"
         mode: 0600
         owner: "{{ admin_username }}"
 
+    # FIXME - use Ansible file module
     - name: Remove RHUI
       shell: |
         rm -f /etc/yum.repos.d/rh-cloud.repo
@@ -597,13 +605,13 @@
 
     - name: Enable RHEL RHSCL and ansible repo
       rhsm_repository:
-        name: 
+        name:
           - rhel-7-server-rpms
           - rhel-7-server-extras-rpms
-          - rhel-7-server-ose-3.9-rpms
-          - rhel-7-server-ansible-2.4-rpms
-          - rhel-7-fast-datapath-rpms
-          - rh-gluster-3-client-for-rhel-7-server-rpms
+          - rhel-7-server-ose-3.11-rpms
+          - rhel-7-server-ansible-2.6-rpms
+          #- rh-gluster-3-client-for-rhel-7-server-rpms
+          #- rhel-server-rhscl-7-rpms
         state: enabled
 
     - name: Update system to latest packages
@@ -611,11 +619,11 @@
         name: '*'
         state: latest
         exclude: WALinuxAgent
-    
-    - name: Az CLI import rpm key   
+
+    - name: Az CLI import rpm key
       rpm_key:
         state: present
-        key: https://packages.microsoft.com/keys/microsoft.asc 
+        key: https://packages.microsoft.com/keys/microsoft.asc
 
     - name: Add Azure repository
       yum_repository:
@@ -624,53 +632,86 @@
         baseurl: https://packages.microsoft.com/yumrepos/azure-cli
         gpgcheck: yes
         gpgkey: https://packages.microsoft.com/keys/microsoft.asc
-    
+
     #TODO: Fix versions
     - name: Install ALL packages
-      yum: 
-        name:
-          - wget
-          - net-tools
-          - bind-utils
-          - iptables-services
-          - bridge-utils
-          - bash-completion
-          - httpd-tools
-          - kexec-tools
-          - sos
-          - psacct
-          - ansible
-          - glusterfs-fuse
-          - gcc
-          - python-devel
-          - git
-          - azure-cli
-          - python27-python-pip
-          - atomic-openshift-excluder
-          - atomic-openshift-docker-excluder
+      yum:
+        name: "{{ packages }}"
         state: present
+
+#        name: "['wget', 'net-tools', 'bind-utils', 'iptables-services', 'bridge-utils', 'bash-completion', 'httpd-tools', 'kexec-tools', 'sos', 'psacct', 'ansible', 'glusterfs-fuse', 'gcc', 'python-devel', 'git', 'azure-cli', 'python27-python-pip', 'atomic-openshift-excluder', 'atomic-openshift-docker-excluder']"
+
+# The default packages as per 3.11 are
+# wget git net-tools bind-utils yum-utils iptables-services bridge-utils bash-completion kexec-tools sos psacct
+# But these are installed by the default prerequisites playbook, so no need to install.
+
+      vars:
+        packages:
+#        - wget
+#        - net-tools
+#        - bind-utils
+#        - iptables-services
+#        - bridge-utils
+#        - bash-completion
+        - httpd-tools
+#        - kexec-tools
+#        - sos
+#        - psacct
+        # Should only be needed on the bastion
+        - ansible
+        # Only useful if using gluster
+        #- glusterfs-fuse
+        # This has no dependencies
+        #- gcc
+        # This has no dependencies
+        #- python-devel
+#        - git
+        # OK, this is useful, but not required, and I'd argue only on the bastion.
+        - azure-cli
+        # Not sure why this is required, and its in RHSCL
+        # yum erase, just removes this and its dependent packages.
+        #- python27-python-pip
+        # Not sure if the excluders are still needed.
+        - atomic-openshift-excluder
+        - atomic-openshift-docker-excluder
+
+        # Atomic CLI for signing and policies - only on the bastion
+        - atomic
+
+#    - name: Install common software requirements
+#      become: true
+#      state: present
+#      yum:
+#        - yum-plugin-fastestmirror
+#        - epel-release
+#        - git
+
 
     - name: Excluders for OpenShift
       shell: atomic-openshift-excluder unexclude
 
-    - name: Installing OpenShift utilities
-      yum: 
-        name:
-          - atomic-openshift-utils
-        state: present
+# FFS this was removed ages ago
+#     - name: Installing OpenShift utilities
+#      yum:
+#        name:
+#          - atomic-openshift-utils
+#        state: present
 
+    # FIXME: This is shite.
     - name: Adding DOMAIN to search for resolv.conf
       shell: |
         echo "DOMAIN=`domainname -d`" >> /etc/sysconfig/network-scripts/ifcfg-eth0
 
+    # FIXME: Need to look at this
     - name: Get updateansiblecfg.yaml playbook
       get_url:
         url: https://raw.githubusercontent.com/microsoft/openshift-container-platform-playbooks/master/updateansiblecfg.yaml
         dest: .
-    
+
     - name: Run updateansiblecfg.yaml playbook
       shell: ansible-playbook -f 25 updateansiblecfg.yaml
-      
+
+    # FIXME: We don't need this. Just drive the default playbooks directly.
     - name: Get "deployOpenShift.sh"
       get_url:
         url: https://gist.githubusercontent.com/brusMX/b8ba89a4ce7063363315e6ce69b4a1d3/raw/652d8c73bc5f45e0383d0781c9e5293e56c4dc1f/export-all.sh
@@ -678,70 +719,69 @@
     - file:
         path: export-all.sh
         mode: "a+x"
-    
+
     # Deploying openshift CP with deployOpenShift.sh
     # 'bash ', parameters('openshiftDeploymentScriptFileName')
-    - name: Run deployOpenShift.sh Container Platform
-      shell: |
-        args=(
-          # $1 SUDOUSER=$1 - parameters('adminUsername')
-          "{{ admin_username }}" 
-          # $2 PASSWORD="$2" - parameters('openshiftPassword')
-          "{{ ocp_admin_passwd }}" \
-          # $3 MASTER=$3 - parameters('openshiftMasterHostname')
-          "{{ cluster_prefix }}-master" \
-          # $4 MASTERPUBLICIPHOSTNAME=$4 - parameters('openshiftMasterPublicIpFqdn')
-          "{{ master_publicip_fqdn }}" \
-          # $5 MASTERPUBLICIPADDRESS=$5 - parameters('openshiftMasterPublicIpAddress')
-          "{{ master_publicip }}" \
-          # $6 INFRA=$6 - parameters('openshiftInfraHostname')
-          "{{ cluster_prefix }}-infra" \
-          # $7 NODE=$7 - parameters('openshiftNodeHostname')
-          "{{ cluster_prefix }}-node" \
-          # $8 NODECOUNT=$8 - parameters('nodeInstanceCount')
-          "{{ node_count }}" \
-          # $9 INFRACOUNT=${9} - parameters('infraInstanceCount')
-          "{{ infra_count }}" \
-          # $10 MASTERCOUNT=${10} - parameters('MasterInstanceCount')
-          "{{ master_count }}" \
-          # $11 ROUTING=${11} - parameters(parameters('subDomainChosen'))
-          "{{ routing }}" \
-          # $12 REGISTRYSA=${12} - parameters('newStorageAccountRegistry')
-          "{{ registry_storage_account }}" \
-          # $13 ACCOUNTKEY="${13}" - parameters('newStorageAccountKey')
-          "{{ registry_storage_account_key }}" \
-          # $14 METRICS=${14} - parameters('enableMetrics')
-          "{{ deploy_metrics }}"
-          # $15 LOGGING=${15}
-          "{{ deploy_logging }}"
-          # $16 TENANTID=${16} - variables('tenantId')
-          "{{ tenant_id }}" \
-          # $17 SUBSCRIPTIONID=${17} - variables('subscriptionId')
-          "{{ subscription_id }}" \
-          # $18 AADCLIENTID=${18} - parameters('aadClientId')
-          "{{ aad_client_id }}" \
-          # $19 AADCLIENTSECRET="${19}" - parameters('aadClientSecret')
-          "{{ aad_client_secret }}" \
-          # $20 RESOURCEGROUP=${20} - variables('resourceGroupName')
-          "{{ resource_group }}" \
-          # $21 LOCATION=${21} - variables('location')
-          "{{ location }}" \
-          # $22 AZURE=${22} - parameters('enableAzure')
-          "{{ deploy_azure_cloud_provider }}" \
-          # $23 STORAGEKIND=${23}
-          "{{ disk_type }}"
-          # $24 ENABLECNS
-          "{{ deploy_cns }}"
-          # $25 CNS
-          "{{ cluster_prefix }}-cns"
-          # $26 CNSCOUNT
-          "{{ cns_count }}"
-          # $27 VNETNAME #TODO: remove var from script is not utilized
-          "{{ empty_var }}"
-          # $28 NODENSG #TODO: remove var from script is not utilized
-          "{{ empty_var }}"
-          # $29 NODEAVAILIBILITYSET #TODO: remove var from script is not utilized 
-          "{{ empty_var }}"
-        )
-        ./export-all.sh "${args[@]}"
-        
+#    - name: Run deployOpenShift.sh Container Platform
+#      shell: |
+#        args=(
+#          # $1 SUDOUSER=$1 - parameters('adminUsername')
+#          "{{ admin_username }}"
+#          # $2 PASSWORD="$2" - parameters('openshiftPassword')
+#          "{{ ocp_admin_passwd }}" \
+#          # $3 MASTER=$3 - parameters('openshiftMasterHostname')
+#          "{{ cluster_prefix }}-master" \
+#          # $4 MASTERPUBLICIPHOSTNAME=$4 - parameters('openshiftMasterPublicIpFqdn')
+#          "{{ master_publicip_fqdn }}" \
+#          # $5 MASTERPUBLICIPADDRESS=$5 - parameters('openshiftMasterPublicIpAddress')
+#          "{{ master_publicip }}" \
+#          # $6 INFRA=$6 - parameters('openshiftInfraHostname')
+#          "{{ cluster_prefix }}-infra" \
+#          # $7 NODE=$7 - parameters('openshiftNodeHostname')
+#          "{{ cluster_prefix }}-node" \
+#          # $8 NODECOUNT=$8 - parameters('nodeInstanceCount')
+#          "{{ node_count }}" \
+#          # $9 INFRACOUNT=${9} - parameters('infraInstanceCount')
+#          "{{ infra_count }}" \
+#          # $10 MASTERCOUNT=${10} - parameters('MasterInstanceCount')
+#          "{{ master_count }}" \
+#          # $11 ROUTING=${11} - parameters(parameters('subDomainChosen'))
+#          "{{ routing }}" \
+#          # $12 REGISTRYSA=${12} - parameters('newStorageAccountRegistry')
+#          "{{ registry_storage_account }}" \
+#          # $13 ACCOUNTKEY="${13}" - parameters('newStorageAccountKey')
+#          "{{ registry_storage_account_key }}" \
+#          # $14 METRICS=${14} - parameters('enableMetrics')
+#          "{{ deploy_metrics }}"
+#          # $15 LOGGING=${15}
+#          "{{ deploy_logging }}"
+#          # $16 TENANTID=${16} - variables('tenantId')
+#          "{{ tenant_id }}" \
+#          # $17 SUBSCRIPTIONID=${17} - variables('subscriptionId')
+#          "{{ subscription_id }}" \
+#          # $18 AADCLIENTID=${18} - parameters('aadClientId')
+#          "{{ aad_client_id }}" \
+#          # $19 AADCLIENTSECRET="${19}" - parameters('aadClientSecret')
+#          "{{ aad_client_secret }}" \
+#          # $20 RESOURCEGROUP=${20} - variables('resourceGroupName')
+#          "{{ resource_group }}" \
+#          # $21 LOCATION=${21} - variables('location')
+#          "{{ location }}" \
+#          # $22 AZURE=${22} - parameters('enableAzure')
+#          "{{ deploy_azure_cloud_provider }}" \
+#          # $23 STORAGEKIND=${23}
+#          "{{ disk_type }}"
+#          # $24 ENABLECNS
+#          "{{ deploy_cns }}"
+#          # $25 CNS
+#          "{{ cluster_prefix }}-cns"
+#          # $26 CNSCOUNT
+#          "{{ cns_count }}"
+#          # $27 VNETNAME #TODO: remove var from script is not utilized
+#          "{{ empty_var }}"
+#          # $28 NODENSG #TODO: remove var from script is not utilized
+#          "{{ empty_var }}"
+#          # $29 NODEAVAILIBILITYSET #TODO: remove var from script is not utilized
+#          "{{ empty_var }}"
+#        )
+#        ./export-all.sh "${args[@]}"
